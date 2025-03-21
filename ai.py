@@ -487,7 +487,7 @@ async def on_message(message: Message):
     #                   has_image)
 
     # В этом примере отвечаем на всё подряд в канале:
-    should_respond = True
+    should_respond = False
 
     if not should_respond:
         return
