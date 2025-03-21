@@ -455,6 +455,8 @@ bot = SafetyBot(command_prefix="!", self_bot=True)
 @bot.event
 async def on_ready():
     print(f"Бот {bot.user} готов к работе!")
+    print(f"Переменная TARGET_THREAD_ID = {TARGET_THREAD_ID}")
+    print(f"Переменная OPENROUTER_API_KEY доступна: {'Да' if OPENROUTER_API_KEY else 'Нет'}")
     bot.conversation_history[TARGET_THREAD_ID] = []
 
 @bot.event
@@ -904,7 +906,14 @@ async def on_message(message: Message):
             final_response = ""
 
             while retry_count < MAX_RETRIES:
-                response = requests.post(endpoint, headers=headers, json=payload, timeout=30)
+                try:
+                    response = requests.post(endpoint, headers=headers, json=payload, timeout=30)
+                except Exception as e:
+                    print(f"Ошибка при отправке запроса к API: {str(e)}")
+                    retry_count += 1
+                    await asyncio.sleep(1)
+                    continue
+
                 try:
                     data = response.json()
                 except Exception as e:
