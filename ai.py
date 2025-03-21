@@ -21,7 +21,7 @@ SUPABASE_URL = os.environ.get("SUPABASE_URL")
 SUPABASE_KEY = os.environ.get("SUPABASE_KEY")
 TARGET_THREAD_ID = os.environ.get("TARGET_THREAD_ID")
 OPENROUTER_API_KEY = os.environ.get("OPENROUTER_API_KEY")
-MODEL = os.environ.get("MODEL", "deepseek/deepseek-chat:free")
+MODEL = os.environ.get("MODEL")
 ENDPOINT = "https://openrouter.ai/api/v1/chat/completions"
 
 # Flask-приложение для поддержания работы бота на Render.com
@@ -512,7 +512,7 @@ async def on_message(message: Message):
     has_image = any(is_image_attachment(att) for att in message.attachments)
 
     # В этом примере отвечаем на всё подряд в канале:
-    should_respond = True
+    should_respond = False
 
     if not should_respond:
         return
