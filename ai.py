@@ -10,6 +10,17 @@ import json
 from datetime import datetime
 from flask import Flask
 from supabase import create_client, Client
+from dotenv import load_dotenv
+
+# Загружаем .env файл, если он существует
+load_dotenv()
+
+# Получаем переменные с приоритетом из переменных окружения Render
+DISCORD_TOKEN = os.environ.get("DISCORD_TOKEN") 
+SUPABASE_URL = os.environ.get("SUPABASE_URL")
+SUPABASE_KEY = os.environ.get("SUPABASE_KEY")
+TARGET_THREAD_ID = int(os.environ.get("TARGET_THREAD_ID", "0"))
+OPENROUTER_API_KEY = os.environ.get("OPENROUTER_API_KEY")
 
 # Flask-приложение для поддержания работы бота на Render.com
 app = Flask(__name__)
@@ -18,21 +29,12 @@ app = Flask(__name__)
 def home():
     return "Бот работает! Слава ВА!", 200
 
-# Получение токенов из переменных окружения
-DISCORD_TOKEN = "DISCORD_TOKEN"
-OPENROUTER_API_KEY = "OPENROUTER_API_KEY"  # Ключ OpenRouter API в Render.com
-MODEL = "google/gemma-3-27b-it:free"  # Оставляем модель видимой
-ENDPOINT = "https://openrouter.ai/api/v1/chat/completions"
-
 # Получаем ID треда из переменных окружения
-TARGET_THREAD_ID = "TARGET_THREAD_ID"
 MAX_HISTORY_LENGTH = 10000
 MAX_RESPONSE_LENGTH = 1950
 MAX_RETRIES = 10
 
 # Настройка Supabase
-SUPABASE_URL = "SUPABASE_URL"
-SUPABASE_KEY = "SUPABASE_KEY"
 supabase: Client = None
 
 if SUPABASE_URL and SUPABASE_KEY:
