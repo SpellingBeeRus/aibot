@@ -6,8 +6,10 @@ import asyncio
 import re
 import os
 import threading
-from pymongo import MongoClient
+import json
+from datetime import datetime
 from flask import Flask
+from supabase import create_client, Client
 
 # Flask-приложение для поддержания работы бота на Render.com
 app = Flask(__name__)
@@ -23,15 +25,24 @@ MODEL = "google/gemma-3-27b-it:free"  # Оставляем модель види
 ENDPOINT = "https://openrouter.ai/api/v1/chat/completions"
 
 # Получаем ID треда из переменных окружения
-TARGET_THREAD_ID = int(os.environ.get("TARGET_THREAD_ID"))
-MAX_HISTORY_LENGTH = 10000
-MAX_RESPONSE_LENGTH = 1950
-MAX_RETRIES = 10
+TARGET_THREAD_ID = int(os.environ.get("TARGET_THREAD_ID", "0"))
+MAX_HISTORY_LENGTH = int(os.environ.get("MAX_HISTORY_LENGTH", "10000"))
+MAX_RESPONSE_LENGTH = int(os.environ.get("MAX_RESPONSE_LENGTH", "1950"))
+MAX_RETRIES = int(os.environ.get("MAX_RETRIES", "10"))
 
-# MongoDB подключение
-MONGODB_URI = os.environ.get("MONGODB_URI")
-mongo_client = MongoClient(MONGODB_URI)
-db = mongo_client.AIbot  # имя базы данных
+# Настройка Supabase
+SUPABASE_URL = os.environ.get("SUPABASE_URL", "")
+SUPABASE_KEY = os.environ.get("SUPABASE_KEY", "")
+supabase: Client = None
+
+if SUPABASE_URL and SUPABASE_KEY:
+    try:
+        supabase = create_client(SUPABASE_URL, SUPABASE_KEY)
+        print("Подключено к Supabase!")
+    except Exception as e:
+        print(f"Ошибка подключения к Supabase: {e}")
+else:
+    print("ПРЕДУПРЕЖДЕНИЕ: Не указаны URL или ключ Supabase. Сохранение сообщений будет отключено.")
 
 # Регулярное выражение для фильтрации запрещенного контента
 CONTENT_FILTERS = re.compile(
@@ -442,21 +453,26 @@ class SafetyBot(commands.Bot):
         if len(self.conversation_history[thread_id]) > MAX_HISTORY_LENGTH * 2:
             self.conversation_history[thread_id] = self.conversation_history[thread_id][-MAX_HISTORY_LENGTH*2:]
     
-    async def save_to_mongodb(self, thread_id: int, author_id: int, content: str, is_bot: bool):
-        """Сохраняет сообщение в MongoDB"""
+    async def save_to_supabase(self, thread_id: int, author_id: int, content: str, is_bot: bool):
+        """Сохраняет сообщение в Supabase"""
+        if not supabase:
+            return False
+            
         try:
-            messages = db.messages
             message_data = {
-                "thread_id": thread_id,
-                "author_id": author_id,
+                "thread_id": str(thread_id),
+                "author_id": str(author_id),
                 "content": content,
                 "is_bot": is_bot,
-                "timestamp": asyncio.get_event_loop().time()
+                "created_at": datetime.now().isoformat()
             }
-            messages.insert_one(message_data)
-            return True
+            
+            result = supabase.table('messages').insert(message_data).execute()
+            if hasattr(result, 'data') and result.data:
+                return True
+            return False
         except Exception as e:
-            print(f"Ошибка при сохранении в MongoDB: {str(e)}")
+            print(f"Ошибка при сохранении в Supabase: {str(e)}")
             return False
 
 bot = SafetyBot(command_prefix="!", self_bot=True)
@@ -464,8 +480,7 @@ bot = SafetyBot(command_prefix="!", self_bot=True)
 @bot.event
 async def on_ready():
     print(f"Бот {bot.user} готов к работе!")
-    print(f"Переменная TARGET_THREAD_ID = {TARGET_THREAD_ID}")
-    print(f"Переменная OPENROUTER_API_KEY доступна: {'Да' if OPENROUTER_API_KEY else 'Нет'}")
+    print(f"Настроен для отслеживания канала с ID: {TARGET_THREAD_ID}")
     bot.conversation_history[TARGET_THREAD_ID] = []
 
 @bot.event
@@ -478,22 +493,19 @@ async def on_message(message: Message):
     if message.channel.id != TARGET_THREAD_ID:
         return
 
-    # Сохраняем сообщение пользователя в MongoDB
-    await bot.save_to_mongodb(
-        message.channel.id, 
-        message.author.id, 
-        message.clean_content, 
-        False
-    )
+    print(f"Получено сообщение: '{message.content}' в канале {message.channel.id}")
+
+    # Сохраняем сообщение пользователя в Supabase
+    if supabase:
+        await bot.save_to_supabase(
+            message.channel.id, 
+            message.author.id, 
+            message.clean_content, 
+            False
+        )
 
     # Проверяем, есть ли вложения-изображения
     has_image = any(is_image_attachment(att) for att in message.attachments)
-
-    # --- Вариант 1: отвечать на ВСЕ сообщения в этом канале (с текстом или без)
-    # Если нужно только при упоминании бота, раскомментируйте строку ниже и уберите "True":
-    # should_respond = (bot.user.mentioned_in(message) or 
-    #                   (message.reference and (await message.channel.fetch_message(message.reference.message_id)).author == bot.user) or 
-    #                   has_image)
 
     # В этом примере отвечаем на всё подряд в канале:
     should_respond = True
@@ -503,6 +515,7 @@ async def on_message(message: Message):
 
     # Удаляем блоки <think>...</think> из пользовательского текста
     user_text = strip_think(message.clean_content)
+    print(f"Обработанный текст пользователя: {user_text}")
 
     # Проверка «запрещённого» текста (пример)
     if bot.deep_content_check(user_text):
@@ -975,8 +988,8 @@ async def on_message(message: Message):
             try:
                 await message.reply(final_response)
                 
-                # Сохраняем ответ бота в MongoDB
-                await bot.save_to_mongodb(
+                # Сохраняем ответ бота в Supabase
+                await bot.save_to_supabase(
                     message.channel.id,
                     bot.user.id,
                     final_response,
@@ -999,7 +1012,7 @@ async def on_message(message: Message):
 
 # Функция для запуска Flask-сервера
 def run_flask_app():
-    port = int(os.environ.get("PORT", 5000))
+    port = int(os.environ.get("PORT", 10000))
     app.run(host="0.0.0.0", port=port)
 
 # Функция для запуска Discord-бота
@@ -1016,9 +1029,6 @@ def run_discord_bot():
     if TARGET_THREAD_ID == 0:
         print("ОШИБКА: ID треда не найден в переменных окружения Render.com")
         exit(1)
-
-    if not MONGODB_URI:
-        print("ПРЕДУПРЕЖДЕНИЕ: URI MongoDB не найден в переменных окружения Render.com. Сохранение сообщений будет отключено.")
 
     # Запуск бота
     bot.run(DISCORD_TOKEN)
