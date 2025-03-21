@@ -23,7 +23,6 @@ TARGET_THREAD_ID = int(os.environ.get("TARGET_THREAD_ID", "0"))
 OPENROUTER_API_KEY = os.environ.get("OPENROUTER_API_KEY")
 MODEL = os.environ.get("MODEL")
 ENDPOINT = "https://openrouter.ai/api/v1/chat/completions"
-
 # Flask-приложение для поддержания работы бота на Render.com
 app = Flask(__name__)
 
@@ -512,7 +511,7 @@ async def on_message(message: Message):
     has_image = any(is_image_attachment(att) for att in message.attachments)
 
     # В этом примере отвечаем на всё подряд в канале:
-    should_respond = True
+    should_respond = False
 
     if not should_respond:
         return
