@@ -492,11 +492,13 @@ async def on_message(message: Message):
     if message.author == bot.user:
         return
     
-    # Проверяем, что сообщение в нужном канале/треде
-    if message.channel.id != TARGET_THREAD_ID:
+    # Проверяем, упомянули ли бота в сообщении (пинг)
+    bot_mentioned = bot.user.mentioned_in(message)
+    if not bot_mentioned:
+        # Если бота не упомянули, то игнорируем сообщение полностью
         return
-
-    print(f"Получено сообщение: '{message.content}' в канале {message.channel.id}")
+    
+    print(f"Бот упомянут в сообщении от {message.author.name} в канале {message.channel.id}")
 
     # Сохраняем сообщение пользователя в Supabase
     if supabase:
@@ -509,12 +511,6 @@ async def on_message(message: Message):
 
     # Проверяем, есть ли вложения-изображения
     has_image = any(is_image_attachment(att) for att in message.attachments)
-
-    # В этом примере отвечаем на всё подряд в канале:
-    should_respond = False
-
-    if not should_respond:
-        return
 
     # Удаляем блоки <think>...</think> из пользовательского текста
     user_text = strip_think(message.clean_content)
