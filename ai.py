@@ -22,6 +22,7 @@ SUPABASE_KEY = os.environ.get("SUPABASE_KEY")
 TARGET_THREAD_ID = int(os.environ.get("TARGET_THREAD_ID", "0"))
 OPENROUTER_API_KEY = os.environ.get("OPENROUTER_API_KEY")
 MODEL = os.environ.get("MODEL", "google/gemma-3-27b-it:free")
+ENDPOINT = "https://openrouter.ai/api/v1/chat/completions"
 
 # Flask-приложение для поддержания работы бота на Render.com
 app = Flask(__name__)
