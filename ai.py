@@ -19,7 +19,7 @@ load_dotenv()
 DISCORD_TOKEN = os.environ.get("DISCORD_TOKEN") 
 SUPABASE_URL = os.environ.get("SUPABASE_URL")
 SUPABASE_KEY = os.environ.get("SUPABASE_KEY")
-TARGET_THREAD_ID = int(os.environ.get("TARGET_THREAD_ID", "0"))
+TARGET_THREAD_ID = os.environ.get("TARGET_THREAD_ID")
 OPENROUTER_API_KEY = os.environ.get("OPENROUTER_API_KEY")
 MODEL = os.environ.get("MODEL", "deepseek/deepseek-chat:free")
 ENDPOINT = "https://openrouter.ai/api/v1/chat/completions"
