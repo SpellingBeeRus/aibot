@@ -5,7 +5,16 @@ import requests
 import asyncio
 import re
 import os
+import threading
 from pymongo import MongoClient
+from flask import Flask
+
+# Flask-приложение для поддержания работы бота на Render.com
+app = Flask(__name__)
+
+@app.route('/')
+def home():
+    return "Бот работает! Слава ВА!", 200
 
 # Получение токенов из переменных окружения
 DISCORD_TOKEN = os.environ.get("DISCORD_TOKEN")  # Токен Discord в Render.com
@@ -487,7 +496,7 @@ async def on_message(message: Message):
     #                   has_image)
 
     # В этом примере отвечаем на всё подряд в канале:
-    should_respond = False
+    should_respond = True
 
     if not should_respond:
         return
@@ -988,21 +997,38 @@ async def on_message(message: Message):
             except discord.Forbidden:
                 print("Нет разрешения добавить реакцию ⚠ при обработке исключения.")
 
-# Проверяем наличие необходимых переменных окружения
-if not DISCORD_TOKEN:
-    print("ОШИБКА: Токен Discord не найден в переменных окружения Render.com")
-    exit(1)
-    
-if not OPENROUTER_API_KEY:
-    print("ОШИБКА: API ключ OpenRouter не найден в переменных окружения Render.com")
-    exit(1)
-    
-if TARGET_THREAD_ID == 0:
-    print("ОШИБКА: ID треда не найден в переменных окружения Render.com")
-    exit(1)
+# Функция для запуска Flask-сервера
+def run_flask_app():
+    port = int(os.environ.get("PORT", 5000))
+    app.run(host="0.0.0.0", port=port)
 
-if not MONGODB_URI:
-    print("ПРЕДУПРЕЖДЕНИЕ: URI MongoDB не найден в переменных окружения Render.com. Сохранение сообщений будет отключено.")
+# Функция для запуска Discord-бота
+def run_discord_bot():
+    # Проверяем наличие необходимых переменных окружения
+    if not DISCORD_TOKEN:
+        print("ОШИБКА: Токен Discord не найден в переменных окружения Render.com")
+        exit(1)
+        
+    if not OPENROUTER_API_KEY:
+        print("ОШИБКА: API ключ OpenRouter не найден в переменных окружения Render.com")
+        exit(1)
+        
+    if TARGET_THREAD_ID == 0:
+        print("ОШИБКА: ID треда не найден в переменных окружения Render.com")
+        exit(1)
 
-# Запуск бота
-bot.run(DISCORD_TOKEN)
+    if not MONGODB_URI:
+        print("ПРЕДУПРЕЖДЕНИЕ: URI MongoDB не найден в переменных окружения Render.com. Сохранение сообщений будет отключено.")
+
+    # Запуск бота
+    bot.run(DISCORD_TOKEN)
+
+# Запускаем оба процесса в разных потоках
+if __name__ == '__main__':
+    # Создаем и запускаем поток для Discord-бота
+    discord_thread = threading.Thread(target=run_discord_bot)
+    discord_thread.daemon = True
+    discord_thread.start()
+    
+    # Запускаем Flask-сервер в основном потоке
+    run_flask_app()
