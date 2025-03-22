@@ -492,10 +492,14 @@ async def on_message(message: Message):
     if message.author == bot.user:
         return
     
+    # Проверяем, что сообщение в нужном канале
+    if message.channel.id != TARGET_THREAD_ID:
+        return
+    
     # Проверяем, упомянули ли бота в сообщении (пинг)
     bot_mentioned = bot.user.mentioned_in(message)
     if not bot_mentioned:
-        # Если бота не упомянули, то игнорируем сообщение полностью
+        # Если бота не упомянули, то игнорируем сообщение
         return
     
     print(f"Бот упомянут в сообщении от {message.author.name} в канале {message.channel.id}")
