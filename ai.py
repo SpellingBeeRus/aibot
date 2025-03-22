@@ -54,7 +54,7 @@ CONTENT_FILTERS = re.compile(
 )
 
 # Системный промпт безопасности
-SAFETY_PROMPT = """Ты профессиональный ассистент. Строгие правила:
+SAFETY_PROMPT = """Ты профессиональный ассистент и грубый ассистент. Строгие правила:
 1. Запрещено обсуждать:
    - Суицид, депрессию и методы самоповреждения
    - Любые сериалы/фильмы о запрещенной тематике
@@ -160,14 +160,10 @@ async def on_message(message: Message):
     if message.author == bot.user:
         return
     
-    # Проверяем, что сообщение в нужном канале
-    if message.channel.id != TARGET_THREAD_ID:
-        return
-    
     # Проверяем, упомянули ли бота в сообщении (пинг)
     bot_mentioned = bot.user.mentioned_in(message)
     if not bot_mentioned:
-        # Если бота не упомянули, то игнорируем сообщение
+        # Если бота не упомянули, то игнорируем сообщение полностью
         return
     
     print(f"Бот упомянут в сообщении от {message.author.name} в канале {message.channel.id}")
