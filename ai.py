@@ -11,6 +11,7 @@ from datetime import datetime
 from flask import Flask
 from supabase import create_client, Client
 from dotenv import load_dotenv
+import aiohttp
 
 # Загружаем .env файл, если он существует
 load_dotenv()
@@ -201,47 +202,56 @@ async def on_message(message: Message):
 
     # Если есть изображение, готовим запрос как vision
     if has_image:
-        vision_instructions = (
-"""Ты профессиональный ассистент. Строгие правила:
-1. Запрещено обсуждать:
-   - Суицид, депрессию и методы самоповреждения
-   - Любые сериалы/фильмы о запрещенной тематике
-   - Расизм, нацистская символика, нацизм, фашизм.
-   - Обсуждения/упоминания/разговоры политического характера.
-   - Контент 18+ [ ники, аватарки, картинки ].
-   - Притеснения по политическим, религиозным/ориентационным и личным взглядам.
-   - Спам/Флуд/Оффтоп картинками, эмодзи, реакциями, символами и прочими вещами где-либо - запрещено.
-   - Запрещено спамить пингами любых участников сервера.
-   - Умышленное рекламирование своего или чужого ютуб-канала и прочего контента без разрешения @Volidorka или @Миса [ВПП] - запрещено
-   - Нельзя писать команды с префиксом * например: *crime, и так далее и еще # например #ранг и еще + например +1
-   - Все математические формулы и расчёты выводи в простом текстовом формате (например: P = F / A, без LaTeX или Markdown).
-2. При нарушении правил пользователем:
-   - Вежливо отказывайся продолжать разговор
-   - Не упоминай конкретные названия или имена
-   - Предлагай обратиться к специалистам"""
-        )
-        combined_text = vision_instructions + (f"\nПользовательский запрос: {user_text}" if user_text else "")
+        print("Обнаружено изображение, подготовка vision запроса")
         
-        # Формируем «multimodal» контент (зависит от того, поддерживает ли модель формат type:image_url)
-        vision_content = [{"type": "text", "text": combined_text}]
+        # Получаем URL изображения
+        image_url = None
         for att in message.attachments:
             if is_image_attachment(att):
-                vision_content.append({"type": "image_url", "image_url": {"url": att.url}})
+                image_url = att.url
+                print(f"URL изображения: {image_url}")
                 break
-
+        
+        if not image_url:
+            print("URL изображения не найден")
+            await message.reply("Извините, не удалось получить URL изображения")
+            return
+            
+        # Формируем контент сообщения в формате, требуемом OpenRouter
+        vision_content = [
+            {
+                "type": "text",
+                "text": user_text if user_text else "Что изображено на этой картинке?"
+            },
+            {
+                "type": "image_url",
+                "image_url": {
+                    "url": image_url
+                }
+            }
+        ]
+        
+        # Создаем payload для API запроса
         payload = {
             "model": MODEL,
-            "messages": [{"role": "user", "content": vision_content}],
+            "messages": [
+                {
+                    "role": "user",
+                    "content": vision_content
+                }
+            ],
             "temperature": 0.3,
-            "max_tokens": 600,
-            "frequency_penalty": 1.2,
-            "presence_penalty": 0.9
+            "max_tokens": 600
         }
-        endpoint = ENDPOINT
+        
+        # Настраиваем заголовки
         headers = {
             "Authorization": f"Bearer {OPENROUTER_API_KEY}",
             "Content-Type": "application/json"
         }
+        
+        print(f"Отправка vision запроса модели {MODEL}")
+        endpoint = ENDPOINT
     else:
         # Иначе это чисто текстовый запрос
         # Сохраняем в историю
@@ -263,58 +273,58 @@ async def on_message(message: Message):
             "Content-Type": "application/json"
         }
 
-    # Отправляем «печатает...»
-    async with message.channel.typing():
+    # Делаем запрос к API
+    retry_count = 0
+    final_response = ""
+
+    while retry_count < MAX_RETRIES:
         try:
-            retry_count = 0
-            final_response = ""
-
-            while retry_count < MAX_RETRIES:
-                try:
-                    response = requests.post(endpoint, headers=headers, json=payload, timeout=30)
-                except Exception as e:
-                    print(f"Ошибка при отправке запроса к API: {str(e)}")
-                    retry_count += 1
-                    await asyncio.sleep(1)
-                    continue
-
-                try:
-                    data = response.json()
-                except Exception as e:
-                    print("Ошибка при разборе JSON:", response.text)
-                    raise e
-
-                if response.status_code == 200 and "choices" in data:
-                    raw_response = data['choices'][0]['message']['content']
-                    raw_response = strip_think(raw_response)
-
-                    # Проверяем контент ответа (при желании)
-                    if bot.deep_content_check(raw_response):
-                        try:
-                            await message.reply("Не могу ответить на этот вопрос (контент запрещён).")
-                        except discord.Forbidden:
-                            print("Нет разрешения отправить ответ.")
-                        # Если текстовый запрос, удаляем последний «user»
-                        if not has_image and bot.conversation_history[message.channel.id]:
-                            bot.conversation_history[message.channel.id].pop()
-                        return
-
-                    # Форматируем ответ
-                    final_response = await bot.format_response(raw_response)
-                    if final_response.strip():
-                        break
-                    else:
+            async with aiohttp.ClientSession() as session:
+                async with session.post(endpoint, headers=headers, json=payload, timeout=30) as response:
+                    if response.status != 200:
+                        error_text = await response.text()
+                        print(f"Ошибка API: {response.status} - {error_text}")
                         retry_count += 1
-                        print(f"Попытка {retry_count}/{MAX_RETRIES}: получен пустой ответ. Повторная генерация...")
                         await asyncio.sleep(1)
-                else:
-                    error_msg = data.get("error", "Неверный формат ответа от API.")
-                    print(f"Ошибка API: {error_msg}")
+                        continue
+
                     try:
-                        await message.add_reaction('❌')
-                    except discord.Forbidden:
-                        print("Нет разрешения добавить реакцию ❌.")
-                    return
+                        data = await response.json()
+                    except Exception as e:
+                        print(f"Ошибка при разборе JSON: {str(e)}")
+                        print(f"Сырой ответ: {await response.text()}")
+                        retry_count += 1
+                        await asyncio.sleep(1)
+                        continue
+
+                    if response.status == 200 and "choices" in data:
+                        raw_response = data['choices'][0]['message']['content']
+                        raw_response = strip_think(raw_response)
+
+                        # Проверяем контент ответа (при желании)
+                        if bot.deep_content_check(raw_response):
+                            try:
+                                await message.reply("Не могу ответить на этот вопрос (контент запрещён).")
+                            except discord.Forbidden:
+                                print("Нет разрешения отправить ответ.")
+                            return
+
+                        # Форматируем ответ
+                        final_response = await bot.format_response(raw_response)
+                        if final_response.strip():
+                            break
+                        else:
+                            retry_count += 1
+                            print(f"Попытка {retry_count}/{MAX_RETRIES}: получен пустой ответ. Повторная генерация...")
+                            await asyncio.sleep(1)
+                    else:
+                        error_msg = data.get("error", "Неверный формат ответа от API.")
+                        print(f"Ошибка API: {error_msg}")
+                        try:
+                            await message.add_reaction('❌')
+                        except discord.Forbidden:
+                            print("Нет разрешения добавить реакцию ❌.")
+                        return
 
             if not final_response.strip():
                 print(f"Не удалось получить непустой ответ после {MAX_RETRIES} попыток.")
