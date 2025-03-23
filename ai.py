@@ -6,7 +6,6 @@ import asyncio
 import re
 import os
 import threading
-import json
 from datetime import datetime
 from flask import Flask
 from supabase import create_client, Client
@@ -312,8 +311,9 @@ async def on_message(message: Message):
                 print(f"Не удалось получить непустой ответ после {MAX_RETRIES} попыток.")
                 try:
                     await message.add_reaction('⚠')
+                    await message.reply("Я получил пустой ответ от API. Пожалуйста, попробуйте переформулировать вопрос.")
                 except discord.Forbidden:
-                    print("Нет разрешения добавить реакцию ⚠.")
+                    print("Нет разрешения отправить ответ или добавить реакцию.")
                 if not has_image and bot.conversation_history[message.channel.id]:
                     bot.conversation_history[message.channel.id].pop()
                 return
@@ -326,15 +326,19 @@ async def on_message(message: Message):
             print(f"Ошибка API: {error_msg}")
             try:
                 await message.add_reaction('❌')
+                await message.reply(f"Произошла ошибка при обработке запроса: {error_msg}")
             except discord.Forbidden:
-                print("Нет разрешения добавить реакцию ❌.")
+                print("Нет разрешения отправить ответ или добавить реакцию.")
             return
     else:
-        print(f"Не удалось получить ответ от API. Статус код: {response.status_code}")
+        error_status = "Нет ответа от API" if not response else f"Статус код: {response.status_code}"
+        error_text = "Нет ответа" if not response else response.text[:100] + "..." if len(response.text) > 100 else response.text
+        print(f"Не удалось получить ответ от API. {error_status}. Ответ: {error_text}")
         try:
             await message.add_reaction('❌')
+            await message.reply(f"Ошибка соединения с API. {error_status}")
         except discord.Forbidden:
-            print("Нет разрешения добавить реакцию ❌.")
+            print("Нет разрешения отправить ответ или добавить реакцию.")
 
 # Функция для запуска Flask-сервера
 def run_flask_app():
