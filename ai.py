@@ -11,7 +11,6 @@ from datetime import datetime
 from flask import Flask
 from supabase import create_client, Client
 from dotenv import load_dotenv
-import time
 
 # Загружаем .env файл, если он существует
 load_dotenv()
@@ -22,7 +21,7 @@ SUPABASE_URL = os.environ.get("SUPABASE_URL")
 SUPABASE_KEY = os.environ.get("SUPABASE_KEY")
 TARGET_THREAD_ID = int(os.environ.get("TARGET_THREAD_ID", "0"))
 OPENROUTER_API_KEY = os.environ.get("OPENROUTER_API_KEY")
-MODEL = os.environ.get("MODEL")
+MODEL = os.environ.get("MODEL", "google/gemma-3-27b-it:free")
 ENDPOINT = "https://openrouter.ai/api/v1/chat/completions"
 # Flask-приложение для поддержания работы бота на Render.com
 app = Flask(__name__)
@@ -155,7 +154,7 @@ class SafetyBot(commands.Bot):
             print(f"Ошибка при сохранении в Supabase: {str(e)}")
             return False
 
-bot = SafetyBot(command_prefix="!", self_bot=True)
+bot = SafetyBot(command_prefix="!", intents=discord.Intents.all())
 
 @bot.event
 async def on_ready():
@@ -361,27 +360,24 @@ def run_flask_app():
 
 # Функция для запуска Discord-бота
 def run_discord_bot():
-    max_retries = 5
-    retry_count = 0
-    backoff_time = 5  # начальная задержка в секундах
+    # Проверяем наличие необходимых переменных окружения
+    if not DISCORD_TOKEN:
+        print("ОШИБКА: Токен Discord не найден в переменных окружения Render.com")
+        exit(1)
+        
+    if not OPENROUTER_API_KEY:
+        print("ОШИБКА: API ключ OpenRouter не найден в переменных окружения Render.com")
+        exit(1)
+        
+    if TARGET_THREAD_ID == 0:
+        print("ОШИБКА: ID треда не найден в переменных окружения Render.com")
+        exit(1)
+
+    # Добавляем информацию о запуске обычного бота
+    print("Попытка подключения обычного Discord бота")
     
-    while retry_count < max_retries:
-        try:
-            print(f"Попытка подключения бота Discord ({retry_count+1}/{max_retries})")
-            bot.run(DISCORD_TOKEN)
-            break
-        except discord.errors.HTTPException as e:
-            if "429" in str(e):  # Rate limit error
-                retry_count += 1
-                wait_time = backoff_time * (2 ** retry_count)  # экспоненциальная задержка
-                print(f"Превышение лимита запросов. Ожидание {wait_time} секунд...")
-                time.sleep(wait_time)
-            else:
-                print(f"Ошибка HTTP: {e}")
-                break
-        except Exception as e:
-            print(f"Неизвестная ошибка: {e}")
-            break
+    # Запуск бота
+    bot.run(DISCORD_TOKEN)
 
 # Запускаем оба процесса в разных потоках
 if __name__ == '__main__':
