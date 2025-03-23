@@ -1,16 +1,15 @@
 import discord
 from discord import Message
 from discord.ext import commands
-import requests
 import asyncio
 import re
 import os
 import threading
-import json
 from datetime import datetime
 from flask import Flask
 from supabase import create_client, Client
 from dotenv import load_dotenv
+import aiohttp
 
 # Загружаем .env файл, если он существует
 load_dotenv()
@@ -271,50 +270,37 @@ async def on_message(message: Message):
 
             while retry_count < MAX_RETRIES:
                 try:
-                    response = requests.post(endpoint, headers=headers, json=payload, timeout=30)
+                    async with aiohttp.ClientSession() as session:
+                        async with session.post(endpoint, headers=headers, json=payload, timeout=30) as response:
+                            if response.status == 200:
+                                data = await response.json()
+                                raw_response = data['choices'][0]['message']['content']
+                                raw_response = strip_think(raw_response)
+
+                                # Проверяем контент ответа (при желании)
+                                if bot.deep_content_check(raw_response):
+                                    try:
+                                        await message.reply("Не могу ответить на этот вопрос (контент запрещён).")
+                                    except discord.Forbidden:
+                                        print("Нет разрешения отправить ответ.")
+                                    # Если текстовый запрос, удаляем последний «user»
+                                    if not has_image and bot.conversation_history[message.channel.id]:
+                                        bot.conversation_history[message.channel.id].pop()
+                                    return
+
+                                # Форматируем ответ
+                                final_response = await bot.format_response(raw_response)
+                                if final_response.strip():
+                                    break
+                                else:
+                                    retry_count += 1
+                                    print(f"Попытка {retry_count}/{MAX_RETRIES}: получен пустой ответ. Повторная генерация...")
+                                    await asyncio.sleep(1)
                 except Exception as e:
                     print(f"Ошибка при отправке запроса к API: {str(e)}")
                     retry_count += 1
                     await asyncio.sleep(1)
                     continue
-
-                try:
-                    data = response.json()
-                except Exception as e:
-                    print("Ошибка при разборе JSON:", response.text)
-                    raise e
-
-                if response.status_code == 200 and "choices" in data:
-                    raw_response = data['choices'][0]['message']['content']
-                    raw_response = strip_think(raw_response)
-
-                    # Проверяем контент ответа (при желании)
-                    if bot.deep_content_check(raw_response):
-                        try:
-                            await message.reply("Не могу ответить на этот вопрос (контент запрещён).")
-                        except discord.Forbidden:
-                            print("Нет разрешения отправить ответ.")
-                        # Если текстовый запрос, удаляем последний «user»
-                        if not has_image and bot.conversation_history[message.channel.id]:
-                            bot.conversation_history[message.channel.id].pop()
-                        return
-
-                    # Форматируем ответ
-                    final_response = await bot.format_response(raw_response)
-                    if final_response.strip():
-                        break
-                    else:
-                        retry_count += 1
-                        print(f"Попытка {retry_count}/{MAX_RETRIES}: получен пустой ответ. Повторная генерация...")
-                        await asyncio.sleep(1)
-                else:
-                    error_msg = data.get("error", "Неверный формат ответа от API.")
-                    print(f"Ошибка API: {error_msg}")
-                    try:
-                        await message.add_reaction('❌')
-                    except discord.Forbidden:
-                        print("Нет разрешения добавить реакцию ❌.")
-                    return
 
             if not final_response.strip():
                 print(f"Не удалось получить непустой ответ после {MAX_RETRIES} попыток.")
