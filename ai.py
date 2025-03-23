@@ -159,8 +159,7 @@ bot = SafetyBot(command_prefix="!", intents=discord.Intents.all())
 @bot.event
 async def on_ready():
     print(f"Бот {bot.user} готов к работе!")
-    print(f"Настроен для отслеживания канала с ID: {TARGET_THREAD_ID}")
-    bot.conversation_history[TARGET_THREAD_ID] = []
+    print(f"Настроен для работы по упоминаниям")
 
 @bot.event
 async def on_message(message: Message):
