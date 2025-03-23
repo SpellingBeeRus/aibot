@@ -1,5 +1,5 @@
 discord.py
-aiohttp
+requests
 supabase
 python-dotenv
 flask
