@@ -3,4 +3,3 @@ requests
 supabase
 python-dotenv
 flask
-aiohttp

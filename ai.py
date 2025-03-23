@@ -11,7 +11,6 @@ from datetime import datetime
 from flask import Flask
 from supabase import create_client, Client
 from dotenv import load_dotenv
-import aiohttp
 
 # Загружаем .env файл, если он существует
 load_dotenv()
@@ -22,16 +21,14 @@ SUPABASE_URL = os.environ.get("SUPABASE_URL")
 SUPABASE_KEY = os.environ.get("SUPABASE_KEY")
 TARGET_THREAD_ID = int(os.environ.get("TARGET_THREAD_ID", "0"))
 OPENROUTER_API_KEY = os.environ.get("OPENROUTER_API_KEY")
-MODEL = os.environ.get("MODEL", "google/gemma-3-27b-it:free")
+MODEL = os.environ.get("MODEL", "mistralai/mistral-small-3.1-24b-instruct:free")
 ENDPOINT = "https://openrouter.ai/api/v1/chat/completions"
-# ID администратора для пинга при ошибках (замените на нужный ID)
-ADMIN_ID = os.environ.get("ADMIN_ID", "")
 # Flask-приложение для поддержания работы бота на Render.com
 app = Flask(__name__)
 
 @app.route('/')
 def home():
-    return "Бот работает", 200
+    return "Бот работает! Слава ВА!", 200
 
 # Получаем ID треда из переменных окружения
 MAX_HISTORY_LENGTH = 10000
@@ -70,11 +67,12 @@ SAFETY_PROMPT = """Ты профессиональный ассистент. С�
    - Умышленное рекламирование своего или чужого ютуб-канала и прочего контента без разрешения @Volidorka или @Миса [ВПП] - запрещено
    - Нельзя писать команды с префиксом * например: *crime, и так далее и еще # например #ранг и еще + например +1
    - Все математические формулы и расчёты выводи в простом текстовом формате (например: P = F / A, без LaTeX или Markdown).
+   - Писать сообщения на весь экран нельзя.
 2. При нарушении правил пользователем:
    - Вежливо отказывайся продолжать разговор
    - Не упоминай конкретные названия или имена
 3. Как писать сообщения:
-   - Если надо использовать гиперссылки, то используйте следующий формат напримере: [вот ссылка на гугл](www.google.com)
+   - Если надо использовать гиперссылки, то используйте следующий формат: [текст](ссылка)
    - Если надо использовать жирный текст, то используйте следующий формат: **жирный**
    - Если надо использовать курсивный текст, то используйте следующий формат: *курсив* или _курсив_
    - Если надо использовать зачеркнутый текст, то используйте следующий формат: ~~Перечеркнутый~~
@@ -268,99 +266,91 @@ async def on_message(message: Message):
     # Отправляем «печатает...»
     async with message.channel.typing():
         try:
-            async with aiohttp.ClientSession() as session:
-                async with session.post(endpoint, headers=headers, json=payload, timeout=30) as response:
-                    data = await response.json()
-            
-            # Проверяем HTTP-статус ответа
-            if response.status_code != 200:
-                error_message = f"Ошибка API: {response.status_code}"
-                error_detail = "Неизвестная ошибка"
-                
-                try:
-                    error_data = data
-                    if "error" in error_data:
-                        error_detail = error_data["error"].get("message", error_data["error"])
-                except:
-                    pass
-                
-                # Проверяем тип ошибки
-                error_explanation = f"Ошибка OpenRouter API ({response.status_code}): {error_detail}"
-                print(error_explanation)
-                
-                # Специальное сообщение для каждого типа ошибок
-                if response.status_code == 401:
-                    # Неверный API ключ
-                    await message.reply(f"❌ Ошибка авторизации API: Неверный API ключ. '<@1023270857495281827>', пожалуйста, обнови нахуй API-ключ OpenRouter.")
-                elif response.status_code == 429:
-                    # Превышен лимит запросов
-                    await message.reply(f"❌ Достигнут лимит запросов к API. '<@1023270857495281827>', пожалуйста, проверьте лимиты OpenRouter или обнови нахуй API-ключ.")
-                elif response.status_code >= 500:
-                    # Ошибка на стороне сервера
-                    await message.reply("❌ Ошибка сервера OpenRouter. Пожалуйста, попробуйте позже.")
-                else:
-                    # Другие ошибки
-                    await message.reply(f"❌ Произошла ошибка при обработке запроса: {error_detail}")
-                
-                try:
-                    await message.add_reaction('❌')
-                except discord.Forbidden:
-                    print("Нет разрешения добавить реакцию ❌.")
-                return
-            
-            # Обработка успешного ответа
-            try:
-                raw_response = data['choices'][0]['message']['content']
-                raw_response = strip_think(raw_response)
+            retry_count = 0
+            final_response = ""
 
-                # Проверяем контент ответа (при желании)
-                if bot.deep_content_check(raw_response):
+            while retry_count < MAX_RETRIES:
+                try:
+                    response = requests.post(endpoint, headers=headers, json=payload, timeout=30)
+                except Exception as e:
+                    print(f"Ошибка при отправке запроса к API: {str(e)}")
+                    retry_count += 1
+                    await asyncio.sleep(1)
+                    continue
+
+                try:
+                    data = response.json()
+                except Exception as e:
+                    print("Ошибка при разборе JSON:", response.text)
+                    raise e
+
+                if response.status_code == 200 and "choices" in data:
+                    raw_response = data['choices'][0]['message']['content']
+                    raw_response = strip_think(raw_response)
+
+                    # Проверяем контент ответа (при желании)
+                    if bot.deep_content_check(raw_response):
+                        try:
+                            await message.reply("Не могу ответить на этот вопрос (контент запрещён).")
+                        except discord.Forbidden:
+                            print("Нет разрешения отправить ответ.")
+                        # Если текстовый запрос, удаляем последний «user»
+                        if not has_image and bot.conversation_history[message.channel.id]:
+                            bot.conversation_history[message.channel.id].pop()
+                        return
+
+                    # Форматируем ответ
+                    final_response = await bot.format_response(raw_response)
+                    if final_response.strip():
+                        break
+                    else:
+                        retry_count += 1
+                        print(f"Попытка {retry_count}/{MAX_RETRIES}: получен пустой ответ. Повторная генерация...")
+                        await asyncio.sleep(1)
+                else:
+                    error_msg = data.get("error", "Неверный формат ответа от API.")
+                    print(f"Ошибка API: {error_msg}")
                     try:
-                        await message.reply("Не могу ответить на этот вопрос (контент запрещён).")
+                        await message.add_reaction('❌')
                     except discord.Forbidden:
-                        print("Нет разрешения отправить ответ.")
-                    # Если текстовый запрос, удаляем последний «user»
-                    if not has_image and bot.conversation_history[message.channel.id]:
-                        bot.conversation_history[message.channel.id].pop()
+                        print("Нет разрешения добавить реакцию ❌.")
                     return
 
-                # Форматируем ответ
-                final_response = await bot.format_response(raw_response)
-                if final_response.strip():
-                    await message.reply(final_response)
-                    
-                    # Сохраняем ответ бота в Supabase
-                    await bot.save_to_supabase(
-                        message.channel.id,
-                        bot.user.id,
-                        final_response,
-                        True
-                    )
-                    
-                # Сохраняем ответ ассистента в историю (если это текстовый запрос)
-                if not has_image:
-                    bot.update_history(message.channel.id, "assistant", final_response)
-            except Exception as e:
-                print("Ошибка при разборе JSON:", data)
-                await message.reply("❌ Ошибка обработки ответа от OpenRouter API.")
-                await message.add_reaction('❌')
+            if not final_response.strip():
+                print(f"Не удалось получить непустой ответ после {MAX_RETRIES} попыток.")
+                try:
+                    await message.add_reaction('⚠')
+                except discord.Forbidden:
+                    print("Нет разрешения добавить реакцию ⚠.")
+                if not has_image and bot.conversation_history[message.channel.id]:
+                    bot.conversation_history[message.channel.id].pop()
                 return
 
-        except requests.exceptions.Timeout:
-            print("Превышено время ожидания ответа API")
-            await message.reply("⏱️ Превышено время ожидания ответа от API. Пожалуйста, попробуйте позже.")
-            await message.add_reaction('⏱️')
-            return
-        except requests.exceptions.RequestException as e:
-            print(f"Ошибка при отправке запроса к API: {str(e)}")
-            await message.reply(f"❌ Ошибка соединения с OpenRouter API: {str(e)}")
-            await message.add_reaction('❌')
-            return
+            # Отправляем ответ
+            try:
+                await message.reply(final_response)
+                
+                # Сохраняем ответ бота в Supabase
+                await bot.save_to_supabase(
+                    message.channel.id,
+                    bot.user.id,
+                    final_response,
+                    True
+                )
+                
+            except discord.Forbidden:
+                print("Нет разрешения отправить ответ.")
+
+            # Сохраняем ответ ассистента в историю (если это текстовый запрос)
+            if not has_image:
+                bot.update_history(message.channel.id, "assistant", final_response)
+
         except Exception as e:
-            print(f"Непредвиденная ошибка: {str(e)}")
-            await message.reply("❌ Произошла непредвиденная ошибка при обработке запроса.")
-            await message.add_reaction('❌')
-            return
+            print(f"Ошибка: {str(e)}")
+            try:
+                await message.add_reaction('⚠')
+            except discord.Forbidden:
+                print("Нет разрешения добавить реакцию ⚠ при обработке исключения.")
 
 # Функция для запуска Flask-сервера
 def run_flask_app():
