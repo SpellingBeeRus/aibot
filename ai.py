@@ -11,7 +11,6 @@ from datetime import datetime
 from flask import Flask
 from supabase import create_client, Client
 from dotenv import load_dotenv
-import aiohttp
 
 # Загружаем .env файл, если он существует
 load_dotenv()
@@ -221,7 +220,7 @@ async def on_message(message: Message):
         vision_content = [
             {
                 "type": "text",
-                "text": user_text if user_text else "Что изображено на этой картинке?"
+                "text": user_text
             },
             {
                 "type": "image_url",
@@ -235,6 +234,7 @@ async def on_message(message: Message):
         payload = {
             "model": MODEL,
             "messages": [
+                {"role": "system", "content": SAFETY_PROMPT},
                 {
                     "role": "user",
                     "content": vision_content
@@ -279,52 +279,52 @@ async def on_message(message: Message):
 
     while retry_count < MAX_RETRIES:
         try:
-            async with aiohttp.ClientSession() as session:
-                async with session.post(endpoint, headers=headers, json=payload, timeout=30) as response:
-                    if response.status != 200:
-                        error_text = await response.text()
-                        print(f"Ошибка API: {response.status} - {error_text}")
-                        retry_count += 1
-                        await asyncio.sleep(1)
-                        continue
+            # Заменяем асинхронный запрос на синхронный
+            response = requests.post(endpoint, headers=headers, json=payload, timeout=30)
+            
+            if response.status_code != 200:
+                print(f"Ошибка API: {response.status_code} - {response.text}")
+                retry_count += 1
+                await asyncio.sleep(1)
+                continue
 
+            try:
+                data = response.json()
+            except Exception as e:
+                print(f"Ошибка при разборе JSON: {str(e)}")
+                print(f"Сырой ответ: {response.text}")
+                retry_count += 1
+                await asyncio.sleep(1)
+                continue
+
+            if response.status_code == 200 and "choices" in data:
+                raw_response = data['choices'][0]['message']['content']
+                raw_response = strip_think(raw_response)
+
+                # Проверяем контент ответа (при желании)
+                if bot.deep_content_check(raw_response):
                     try:
-                        data = await response.json()
-                    except Exception as e:
-                        print(f"Ошибка при разборе JSON: {str(e)}")
-                        print(f"Сырой ответ: {await response.text()}")
-                        retry_count += 1
-                        await asyncio.sleep(1)
-                        continue
+                        await message.reply("Не могу ответить на этот вопрос (контент запрещён).")
+                    except discord.Forbidden:
+                        print("Нет разрешения отправить ответ.")
+                    return
 
-                    if response.status == 200 and "choices" in data:
-                        raw_response = data['choices'][0]['message']['content']
-                        raw_response = strip_think(raw_response)
-
-                        # Проверяем контент ответа (при желании)
-                        if bot.deep_content_check(raw_response):
-                            try:
-                                await message.reply("Не могу ответить на этот вопрос (контент запрещён).")
-                            except discord.Forbidden:
-                                print("Нет разрешения отправить ответ.")
-                            return
-
-                        # Форматируем ответ
-                        final_response = await bot.format_response(raw_response)
-                        if final_response.strip():
-                            break
-                        else:
-                            retry_count += 1
-                            print(f"Попытка {retry_count}/{MAX_RETRIES}: получен пустой ответ. Повторная генерация...")
-                            await asyncio.sleep(1)
-                    else:
-                        error_msg = data.get("error", "Неверный формат ответа от API.")
-                        print(f"Ошибка API: {error_msg}")
-                        try:
-                            await message.add_reaction('❌')
-                        except discord.Forbidden:
-                            print("Нет разрешения добавить реакцию ❌.")
-                        return
+                # Форматируем ответ
+                final_response = await bot.format_response(raw_response)
+                if final_response.strip():
+                    break
+                else:
+                    retry_count += 1
+                    print(f"Попытка {retry_count}/{MAX_RETRIES}: получен пустой ответ. Повторная генерация...")
+                    await asyncio.sleep(1)
+            else:
+                error_msg = data.get("error", "Неверный формат ответа от API.")
+                print(f"Ошибка API: {error_msg}")
+                try:
+                    await message.add_reaction('❌')
+                except discord.Forbidden:
+                    print("Нет разрешения добавить реакцию ❌.")
+                return
 
             if not final_response.strip():
                 print(f"Не удалось получить непустой ответ после {MAX_RETRIES} попыток.")
