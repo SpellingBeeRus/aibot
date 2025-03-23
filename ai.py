@@ -11,6 +11,7 @@ from datetime import datetime
 from flask import Flask
 from supabase import create_client, Client
 from dotenv import load_dotenv
+import concurrent.futures
 
 # Загружаем .env файл, если он существует
 load_dotenv()
@@ -26,9 +27,11 @@ ENDPOINT = "https://openrouter.ai/api/v1/chat/completions"
 # Flask-приложение для поддержания работы бота на Render.com
 app = Flask(__name__)
 
+executor = concurrent.futures.ThreadPoolExecutor(max_workers=5)
+
 @app.route('/')
 def home():
-    return "Бот работает! Слава ВА!", 200
+    return "Бот работает!", 200
 
 # Получаем ID треда из переменных окружения
 MAX_HISTORY_LENGTH = 10000
@@ -263,71 +266,38 @@ async def on_message(message: Message):
             "Content-Type": "application/json"
         }
 
-    # Отправляем «печатает...»
-    async with message.channel.typing():
+    # Создаем функцию для выполнения запроса в отдельном потоке
+    def make_api_request():
         try:
-            retry_count = 0
-            final_response = ""
+            return requests.post(endpoint, headers=headers, json=payload, timeout=30)
+        except Exception as e:
+            print(f"Ошибка API запроса: {e}")
+            return None
+    
+    # Выполняем запрос в отдельном потоке
+    loop = asyncio.get_event_loop()
+    response = await loop.run_in_executor(executor, make_api_request)
+    
+    if response and response.status_code == 200:
+        data = response.json()
+        if "choices" in data:
+            raw_response = data['choices'][0]['message']['content']
+            raw_response = strip_think(raw_response)
 
-            while retry_count < MAX_RETRIES:
+            # Проверяем контент ответа (при желании)
+            if bot.deep_content_check(raw_response):
                 try:
-                    response = requests.post(endpoint, headers=headers, json=payload, timeout=30)
-                except Exception as e:
-                    print(f"Ошибка при отправке запроса к API: {str(e)}")
-                    retry_count += 1
-                    await asyncio.sleep(1)
-                    continue
-
-                try:
-                    data = response.json()
-                except Exception as e:
-                    print("Ошибка при разборе JSON:", response.text)
-                    raise e
-
-                if response.status_code == 200 and "choices" in data:
-                    raw_response = data['choices'][0]['message']['content']
-                    raw_response = strip_think(raw_response)
-
-                    # Проверяем контент ответа (при желании)
-                    if bot.deep_content_check(raw_response):
-                        try:
-                            await message.reply("Не могу ответить на этот вопрос (контент запрещён).")
-                        except discord.Forbidden:
-                            print("Нет разрешения отправить ответ.")
-                        # Если текстовый запрос, удаляем последний «user»
-                        if not has_image and bot.conversation_history[message.channel.id]:
-                            bot.conversation_history[message.channel.id].pop()
-                        return
-
-                    # Форматируем ответ
-                    final_response = await bot.format_response(raw_response)
-                    if final_response.strip():
-                        break
-                    else:
-                        retry_count += 1
-                        print(f"Попытка {retry_count}/{MAX_RETRIES}: получен пустой ответ. Повторная генерация...")
-                        await asyncio.sleep(1)
-                else:
-                    error_msg = data.get("error", "Неверный формат ответа от API.")
-                    print(f"Ошибка API: {error_msg}")
-                    try:
-                        await message.add_reaction('❌')
-                    except discord.Forbidden:
-                        print("Нет разрешения добавить реакцию ❌.")
-                    return
-
-            if not final_response.strip():
-                print(f"Не удалось получить непустой ответ после {MAX_RETRIES} попыток.")
-                try:
-                    await message.add_reaction('⚠')
+                    await message.reply("Не могу ответить на этот вопрос (контент запрещён).")
                 except discord.Forbidden:
-                    print("Нет разрешения добавить реакцию ⚠.")
+                    print("Нет разрешения отправить ответ.")
+                # Если текстовый запрос, удаляем последний «user»
                 if not has_image and bot.conversation_history[message.channel.id]:
                     bot.conversation_history[message.channel.id].pop()
                 return
 
-            # Отправляем ответ
-            try:
+            # Форматируем ответ
+            final_response = await bot.format_response(raw_response)
+            if final_response.strip():
                 await message.reply(final_response)
                 
                 # Сохраняем ответ бота в Supabase
@@ -338,19 +308,33 @@ async def on_message(message: Message):
                     True
                 )
                 
-            except discord.Forbidden:
-                print("Нет разрешения отправить ответ.")
+            else:
+                print(f"Не удалось получить непустой ответ после {MAX_RETRIES} попыток.")
+                try:
+                    await message.add_reaction('⚠')
+                except discord.Forbidden:
+                    print("Нет разрешения добавить реакцию ⚠.")
+                if not has_image and bot.conversation_history[message.channel.id]:
+                    bot.conversation_history[message.channel.id].pop()
+                return
 
             # Сохраняем ответ ассистента в историю (если это текстовый запрос)
             if not has_image:
                 bot.update_history(message.channel.id, "assistant", final_response)
-
-        except Exception as e:
-            print(f"Ошибка: {str(e)}")
+        else:
+            error_msg = data.get("error", "Неверный формат ответа от API.")
+            print(f"Ошибка API: {error_msg}")
             try:
-                await message.add_reaction('⚠')
+                await message.add_reaction('❌')
             except discord.Forbidden:
-                print("Нет разрешения добавить реакцию ⚠ при обработке исключения.")
+                print("Нет разрешения добавить реакцию ❌.")
+            return
+    else:
+        print(f"Не удалось получить ответ от API. Статус код: {response.status_code}")
+        try:
+            await message.add_reaction('❌')
+        except discord.Forbidden:
+            print("Нет разрешения добавить реакцию ❌.")
 
 # Функция для запуска Flask-сервера
 def run_flask_app():
