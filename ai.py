@@ -177,17 +177,19 @@ async def on_message(message: Message):
     
     print(f"Бот упомянут в сообщении от {message.author.name} в канале {message.channel.id}")
 
-    # Сохраняем сообщение пользователя в Supabase
-    if supabase:
-        await bot.save_to_supabase(
-            message.channel.id, 
-            message.author.id, 
-            message.clean_content, 
-            False
-        )
+    # Показываем индикатор "печатает", чтобы пользователь видел, что бот обрабатывает запрос
+    async with message.channel.typing():
+        # Сохраняем сообщение пользователя в Supabase
+        if supabase:
+            await bot.save_to_supabase(
+                message.channel.id, 
+                message.author.id, 
+                message.clean_content, 
+                False
+            )
 
-    # Проверяем, есть ли вложения-изображения
-    has_image = any(is_image_attachment(att) for att in message.attachments)
+        # Проверяем, есть ли вложения-изображения
+        has_image = any(is_image_attachment(att) for att in message.attachments)
 
     # Удаляем блоки <think>...</think> из пользовательского текста
     user_text = strip_think(message.clean_content)
