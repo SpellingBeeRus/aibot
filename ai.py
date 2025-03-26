@@ -233,12 +233,20 @@ async def on_message(message: Message):
                 vision_content.append({"type": "image_url", "image_url": {"url": att.url}})
                 break
 
+        # Базовый набор параметров
         payload = {
             "model": MODEL,
             "messages": [{"role": "user", "content": vision_content}],
             "temperature": 0.3,
-            "max_tokens": 600,
+            "max_tokens": 600
         }
+        
+        # Добавляем специфичные параметры в зависимости от модели
+        if "gemini" not in MODEL.lower():
+            # Эти параметры не поддерживаются Gemini-моделями
+            payload["frequency_penalty"] = 1.2
+            payload["presence_penalty"] = 0.9
+            
         endpoint = ENDPOINT
         headers = {
             "Authorization": f"Bearer {OPENROUTER_API_KEY}",
@@ -248,6 +256,8 @@ async def on_message(message: Message):
         # Иначе это чисто текстовый запрос
         # Сохраняем в историю
         bot.update_history(message.channel.id, "user", user_text)
+        
+        # Базовый набор параметров
         payload = {
             "model": MODEL,
             "messages": (
@@ -255,15 +265,22 @@ async def on_message(message: Message):
                 + bot.conversation_history[message.channel.id]
             ),
             "temperature": 0.3,
-            "max_tokens": 600,
+            "max_tokens": 600
         }
+        
+        # Добавляем специфичные параметры в зависимости от модели
+        if "gemini" not in MODEL.lower():
+            # Эти параметры не поддерживаются Gemini-моделями
+            payload["frequency_penalty"] = 1.2
+            payload["presence_penalty"] = 0.9
+            
         endpoint = ENDPOINT
         headers = {
             "Authorization": f"Bearer {OPENROUTER_API_KEY}",
             "Content-Type": "application/json"
         }
 
-    # Создаем функцию для выполнения запроса в отдельном потоке
+    # Определяем функцию для API запроса
     def make_api_request():
         try:
             return requests.post(endpoint, headers=headers, json=payload, timeout=30)
