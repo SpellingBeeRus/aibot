@@ -11,7 +11,6 @@ from flask import Flask
 from supabase import create_client, Client
 from dotenv import load_dotenv
 import concurrent.futures
-import google.generativeai as genai
 
 # Загружаем .env файл, если он существует
 load_dotenv()
@@ -21,12 +20,9 @@ DISCORD_TOKEN = os.environ.get("DISCORD_TOKEN")
 SUPABASE_URL = os.environ.get("SUPABASE_URL")
 SUPABASE_KEY = os.environ.get("SUPABASE_KEY")
 TARGET_THREAD_ID = int(os.environ.get("TARGET_THREAD_ID", "0"))
-GOOGLE_API_KEY = os.environ.get("GOOGLE_API_KEY")  # Ключ для Google Gemini API
-MODEL = os.environ.get("MODEL", "gemini-2.5-pro-exp-03-25")  # Модель по умолчанию
-
-# Инициализация Google Generative AI клиента
-genai.configure(api_key=GOOGLE_API_KEY)
-
+OPENROUTER_API_KEY = os.environ.get("OPENROUTER_API_KEY")
+MODEL = os.environ.get("MODEL")
+ENDPOINT = "https://openrouter.ai/api/v1/chat/completions"
 # Flask-приложение для поддержания работы бота на Render.com
 app = Flask(__name__)
 
@@ -195,121 +191,169 @@ async def on_message(message: Message):
         # Проверяем, есть ли вложения-изображения
         has_image = any(is_image_attachment(att) for att in message.attachments)
 
-        # Удаляем блоки <think>...</think> из пользовательского текста
-        user_text = strip_think(message.clean_content)
-        print(f"Обработанный текст пользователя: {user_text}")
+    # Удаляем блоки <think>...</think> из пользовательского текста
+    user_text = strip_think(message.clean_content)
+    print(f"Обработанный текст пользователя: {user_text}")
 
-        # Проверка «запрещённого» текста (пример)
-        if bot.deep_content_check(user_text):
-            try:
-                return await message.reply("Обсуждение данной темы запрещено правилами.")
-            except discord.Forbidden:
-                print("Нет прав отвечать в этот канал.")
-            return
-
+    # Проверка «запрещённого» текста (пример)
+    if bot.deep_content_check(user_text):
         try:
-            # Выбираем модель
-            model = genai.GenerativeModel(MODEL)
+            return await message.reply("Обсуждение данной темы запрещено правилами.")
+        except discord.Forbidden:
+            print("Нет прав отвечать в этот канал.")
+        return
+
+    # Если есть изображение, готовим запрос как vision
+    if has_image:
+        vision_instructions = (
+"""Ты профессиональный ассистент. Строгие правила:
+1. Запрещено обсуждать:
+   - Суицид, депрессию и методы самоповреждения
+   - Любые сериалы/фильмы о запрещенной тематике
+   - Расизм, нацистская символика, нацизм, фашизм.
+   - Обсуждения/упоминания/разговоры политического характера.
+   - Контент 18+ [ ники, аватарки, картинки ].
+   - Притеснения по политическим, религиозным/ориентационным и личным взглядам.
+   - Спам/Флуд/Оффтоп картинками, эмодзи, реакциями, символами и прочими вещами где-либо - запрещено.
+   - Запрещено спамить пингами любых участников сервера.
+   - Умышленное рекламирование своего или чужого ютуб-канала и прочего контента без разрешения @Volidorka или @Миса [ВПП] - запрещено
+   - Нельзя писать команды с префиксом * например: *crime, и так далее и еще # например #ранг и еще + например +1
+   - Все математические формулы и расчёты выводи в простом текстовом формате (например: P = F / A, без LaTeX или Markdown).
+2. При нарушении правил пользователем:
+   - Вежливо отказывайся продолжать разговор
+   - Не упоминай конкретные названия или имена
+   - Предлагай обратиться к специалистам"""
+        )
+        combined_text = vision_instructions + (f"\nПользовательский запрос: {user_text}" if user_text else "")
+        
+        # Формируем «multimodal» контент (зависит от того, поддерживает ли модель формат type:image_url)
+        vision_content = [{"type": "text", "text": combined_text}]
+        for att in message.attachments:
+            if is_image_attachment(att):
+                vision_content.append({"type": "image_url", "image_url": {"url": att.url}})
+                break
+
+        # Базовый набор параметров
+        payload = {
+            "model": MODEL,
+            "messages": [{"role": "user", "content": vision_content}],
+            "temperature": 0.3,
+            "max_tokens": 600
+        }
+        
+        # Добавляем специфичные параметры в зависимости от модели
+        if "gemini" not in MODEL.lower():
+            # Эти параметры не поддерживаются Gemini-моделями
+            payload["frequency_penalty"] = 1.2
+            payload["presence_penalty"] = 0.9
             
-            # Если есть изображение, отправляем с изображением
-            if has_image:
-                # Получаем URL изображения
-                image_url = None
-                for att in message.attachments:
-                    if is_image_attachment(att):
-                        image_url = att.url
-                        break
-                
-                if image_url:
-                    # Для мультимодального запроса
-                    content = [
-                        {'text': f"{SAFETY_PROMPT}\n\nПользовательский запрос: {user_text}"},
-                        {'image_url': image_url}
-                    ]
-                    
-                    # Функция для выполнения запроса с изображением
-                    def make_api_request():
-                        try:
-                            response = model.generate_content(content)
-                            return response
-                        except Exception as e:
-                            print(f"Ошибка API запроса: {e}")
-                            return None
-                else:
-                    # Если изображение не удалось получить
-                    await message.reply("Не удалось обработать изображение.")
-                    return
-            else:
-                # Для текстового запроса используем историю
-                bot.update_history(message.channel.id, "user", user_text)
-                
-                # Подготовка истории сообщений
-                chat_history = []
-                chat_history.append({"role": "system", "content": SAFETY_PROMPT})
-                
-                for msg in bot.conversation_history[message.channel.id]:
-                    chat_history.append(msg)
-                
-                # Функция для выполнения запроса без изображения
-                def make_api_request():
-                    try:
-                        response = model.generate_content(chat_history)
-                        return response
-                    except Exception as e:
-                        print(f"Ошибка API запроса: {e}")
-                        return None
+        endpoint = ENDPOINT
+        headers = {
+            "Authorization": f"Bearer {OPENROUTER_API_KEY}",
+            "Content-Type": "application/json"
+        }
+    else:
+        # Иначе это чисто текстовый запрос
+        # Сохраняем в историю
+        bot.update_history(message.channel.id, "user", user_text)
+        
+        # Базовый набор параметров
+        payload = {
+            "model": MODEL,
+            "messages": (
+                [{"role": "system", "content": SAFETY_PROMPT}]
+                + bot.conversation_history[message.channel.id]
+            ),
+            "temperature": 0.3,
+            "max_tokens": 600
+        }
+        
+        # Добавляем специфичные параметры в зависимости от модели
+        if "gemini" not in MODEL.lower():
+            # Эти параметры не поддерживаются Gemini-моделями
+            payload["frequency_penalty"] = 1.2
+            payload["presence_penalty"] = 0.9
             
-            # Выполняем запрос в отдельном потоке
-            loop = asyncio.get_event_loop()
-            response = await loop.run_in_executor(executor, make_api_request)
-            
-            if response and not response.candidates[0].finish_reason == "SAFETY":
-                # Обрабатываем ответ
-                raw_response = response.text
-                raw_response = strip_think(raw_response)
-                
-                # Проверяем контент ответа
-                if bot.deep_content_check(raw_response):
-                    try:
-                        await message.reply("Не могу ответить на этот вопрос (контент запрещён).")
-                    except discord.Forbidden:
-                        print("Нет разрешения отправить ответ.")
-                    # Если текстовый запрос, удаляем последний «user»
-                    if not has_image and bot.conversation_history[message.channel.id]:
-                        bot.conversation_history[message.channel.id].pop()
-                    return
-                
-                # Форматируем ответ
-                final_response = await bot.format_response(raw_response)
-                if final_response.strip():
-                    await message.reply(final_response)
-                    
-                    # Сохраняем ответ бота в Supabase
-                    await bot.save_to_supabase(
-                        message.channel.id,
-                        bot.user.id,
-                        final_response,
-                        True
-                    )
-                    
-                    # Сохраняем ответ ассистента в историю (если это текстовый запрос)
-                    if not has_image:
-                        bot.update_history(message.channel.id, "assistant", final_response)
-                else:
-                    await message.reply("Я получил пустой ответ. Пожалуйста, попробуйте переформулировать вопрос.")
-            elif response and response.candidates[0].finish_reason == "SAFETY":
-                await message.reply("Я не могу ответить на этот вопрос из соображений безопасности.")
-            else:
-                error_msg = "Не удалось получить ответ от API."
-                if response and hasattr(response, 'error'):
-                    error_msg = f"Ошибка API: {response.error}"
-                
-                print(error_msg)
-                await message.reply(f"Произошла ошибка: {error_msg}")
-                
+        endpoint = ENDPOINT
+        headers = {
+            "Authorization": f"Bearer {OPENROUTER_API_KEY}",
+            "Content-Type": "application/json"
+        }
+
+    # Определяем функцию для API запроса
+    def make_api_request():
+        try:
+            return requests.post(endpoint, headers=headers, json=payload, timeout=30)
         except Exception as e:
-            print(f"Произошла ошибка: {str(e)}")
-            await message.reply(f"Произошла ошибка при обработке запроса: {str(e)}")
+            print(f"Ошибка API запроса: {e}")
+            return None
+    
+    # Выполняем запрос в отдельном потоке
+    loop = asyncio.get_event_loop()
+    response = await loop.run_in_executor(executor, make_api_request)
+    
+    if response and response.status_code == 200:
+        data = response.json()
+        if "choices" in data:
+            raw_response = data['choices'][0]['message']['content']
+            raw_response = strip_think(raw_response)
+
+            # Проверяем контент ответа (при желании)
+            if bot.deep_content_check(raw_response):
+                try:
+                    await message.reply("Не могу ответить на этот вопрос (контент запрещён).")
+                except discord.Forbidden:
+                    print("Нет разрешения отправить ответ.")
+                # Если текстовый запрос, удаляем последний «user»
+                if not has_image and bot.conversation_history[message.channel.id]:
+                    bot.conversation_history[message.channel.id].pop()
+                return
+
+            # Форматируем ответ
+            final_response = await bot.format_response(raw_response)
+            if final_response.strip():
+                await message.reply(final_response)
+                
+                # Сохраняем ответ бота в Supabase
+                await bot.save_to_supabase(
+                    message.channel.id,
+                    bot.user.id,
+                    final_response,
+                    True
+                )
+                
+            else:
+                print(f"Не удалось получить непустой ответ после {MAX_RETRIES} попыток.")
+                try:
+                    await message.add_reaction('⚠')
+                    await message.reply("Я получил пустой ответ от API. Пожалуйста, попробуйте переформулировать вопрос.")
+                except discord.Forbidden:
+                    print("Нет разрешения отправить ответ или добавить реакцию.")
+                if not has_image and bot.conversation_history[message.channel.id]:
+                    bot.conversation_history[message.channel.id].pop()
+                return
+
+            # Сохраняем ответ ассистента в историю (если это текстовый запрос)
+            if not has_image:
+                bot.update_history(message.channel.id, "assistant", final_response)
+        else:
+            error_msg = data.get("error", "Неверный формат ответа от API.")
+            print(f"Ошибка API: {error_msg}")
+            try:
+                await message.add_reaction('❌')
+                await message.reply(f"Произошла ошибка при обработке запроса: {error_msg}")
+            except discord.Forbidden:
+                print("Нет разрешения отправить ответ или добавить реакцию.")
+            return
+    else:
+        error_status = "Нет ответа от API" if not response else f"Статус код: {response.status_code}"
+        error_text = "Нет ответа" if not response else response.text[:100] + "..." if len(response.text) > 100 else response.text
+        print(f"Не удалось получить ответ от API. {error_status}. Ответ: {error_text}")
+        try:
+            await message.add_reaction('❌')
+            await message.reply(f"Ошибка соединения с API. {error_status}")
+        except discord.Forbidden:
+            print("Нет разрешения отправить ответ или добавить реакцию.")
 
 # Функция для запуска Flask-сервера
 def run_flask_app():
@@ -323,8 +367,12 @@ def run_discord_bot():
         print("ОШИБКА: Токен Discord не найден в переменных окружения Render.com")
         exit(1)
         
-    if not GOOGLE_API_KEY:
-        print("ОШИБКА: API ключ Google Gemini не найден в переменных окружения Render.com")
+    if not OPENROUTER_API_KEY:
+        print("ОШИБКА: API ключ OpenRouter не найден в переменных окружения Render.com")
+        exit(1)
+        
+    if TARGET_THREAD_ID == 0:
+        print("ОШИБКА: ID треда не найден в переменных окружения Render.com")
         exit(1)
 
     # Добавляем информацию о запуске обычного бота
