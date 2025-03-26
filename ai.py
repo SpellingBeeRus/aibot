@@ -238,8 +238,6 @@ async def on_message(message: Message):
             "messages": [{"role": "user", "content": vision_content}],
             "temperature": 0.3,
             "max_tokens": 600,
-            "frequency_penalty": 1.2,
-            "presence_penalty": 0.9
         }
         endpoint = ENDPOINT
         headers = {
@@ -258,8 +256,6 @@ async def on_message(message: Message):
             ),
             "temperature": 0.3,
             "max_tokens": 600,
-            "frequency_penalty": 1.2,
-            "presence_penalty": 0.9
         }
         endpoint = ENDPOINT
         headers = {
