@@ -22,7 +22,7 @@ SUPABASE_URL = os.environ.get("SUPABASE_URL")
 SUPABASE_KEY = os.environ.get("SUPABASE_KEY")
 TARGET_THREAD_ID = int(os.environ.get("TARGET_THREAD_ID", "0"))
 GOOGLE_API_KEY = os.environ.get("GOOGLE_API_KEY")  # Ключ для Google Gemini API
-MODEL = os.environ.get("MODEL")  # Модель по умолчанию
+MODEL = os.environ.get("MODEL", "gemini-2.5-pro-exp-03-25")  # Модель по умолчанию
 
 # Инициализация Google Generative AI клиента
 genai.configure(api_key=GOOGLE_API_KEY)
